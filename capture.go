@@ -2,6 +2,8 @@ package capture
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -9,66 +11,57 @@ import (
 	"io/ioutil"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
 )
 
-func init() {
-	path := uio.GetBasePath()
-	fontFile := []string{
-		path + "Bodoni-16-Bold-11.ttf",
-	}
-	font = make([]*truetype.Font, 0)
-
-	// Read the font data.
-	for _, fileName := range fontFile {
-		fontBytes, err := ioutil.ReadFile(fileName)
-		if err != nil {
-			appzaplog.Fatal("read fontFile error", zap.Error(err))
-			panic(err)
-		}
-		tmp, err := freetype.ParseFont(fontBytes)
-		if err != nil {
-			appzaplog.Fatal("parse font error", zap.Error(err))
-			panic(err)
-		}
-		font = append(font, tmp)
-	}
-}
-
 type Captcha struct {
 	Code  []byte
 	Image []byte
 }
 
-var font []*truetype.Font
+func (c *Captcha) String() string {
+	imgBase64Str := base64.StdEncoding.EncodeToString(c.Image)
+	return fmt.Sprintf("\nCode:\n\t%s\nBase64Image:\n\tdata:image/png;base64,%s", c.Code, imgBase64Str)
+}
 
-func (c *Captcha) genImage0() (err error) {
+func (c *Captcha) generateCode(charCount int) {
+	var code bytes.Buffer
+	dict := []byte{
+		'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+		'2', '3', '4', '5', '6', '7', '8', '9',
+	}
+	count := len(dict)
+	rand.Seed(time.Now().UnixNano())
+	code.WriteByte('m')
+	for i := 0; i < charCount-1; i++ {
+		code.WriteByte(dict[rand.Intn(count-1)])
+	}
+	c.Code = code.Bytes()
+}
 
-	var width int = 176
-	var height int = 72
-	var dpi float64 = 72
-	var fontSize float64 = 50
+func (c *Captcha) generateImage(width, height int, fontSize float64, fontHandler *truetype.Font, wrapper func(input *image.RGBA) *image.RGBA) (err error) {
 
-	f_black := color.RGBA{0x2b, 0x2b, 0x2b, 0xff}
-	b_white := color.RGBA{0xea, 0xea, 0xea, 0xff}
+	black := color.RGBA{0x2b, 0x2b, 0x2b, 0xff}
+	whiteSmoke := color.RGBA{0xea, 0xea, 0xea, 0xff}
 
-	fg := image.NewUniform(f_black)
-	bg := image.NewUniform(b_white)
+	pencil := image.NewUniform(black)
+	background := image.NewUniform(whiteSmoke)
 	rgba := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(rgba, rgba.Bounds(), bg, image.Point{}, draw.Src)
+	draw.Draw(rgba, rgba.Bounds(), background, image.Point{}, draw.Src)
 
 	ctx := freetype.NewContext()
 	ctx.SetDst(rgba)
 	ctx.SetClip(rgba.Bounds())
-	ctx.SetSrc(fg)
-	ctx.SetDPI(dpi)
-	ctx.SetFont(font[0])
+	ctx.SetSrc(pencil)
+	ctx.SetDPI(72)
+	ctx.SetFont(fontHandler)
 	ctx.SetFontSize(fontSize)
 
-	// draw the text
+	// draw the code text
 	size := int(ctx.PointToFixed(fontSize) >> 6)
 	xSpace := size - 20
 	x_offset := (width - len(c.Code)*xSpace) / 2
@@ -81,30 +74,64 @@ func (c *Captcha) genImage0() (err error) {
 		x_offset += xSpace
 	}
 
-	// warp the image
-	warp := image.NewRGBA(image.Rect(0, 0, rgba.Bounds().Dx(), rgba.Bounds().Dy()))
-	draw.Draw(warp, warp.Bounds(), bg, image.Point{}, draw.Src)
+	// record background and pencil color
+	rgba.Set(rgba.Bounds().Min.X+1, rgba.Bounds().Max.Y-1, whiteSmoke)
+	rgba.Set(rgba.Bounds().Min.X+2, rgba.Bounds().Max.Y-1, black)
+
+	if wrapper == nil {
+		wrapper = defaultWrapper
+	}
+	rgba = wrapper(rgba)
+
+	// turn it into byte
+	buf := new(bytes.Buffer)
+	err = png.Encode(buf, rgba)
+	if err != nil {
+		return
+	}
+	c.Image = buf.Bytes()
+
+	return
+}
+
+func defaultWrapper(input *image.RGBA) *image.RGBA {
+	// drawing board attribute
+	attr := input.Bounds()
+	width := attr.Dx()
+	height := attr.Dy()
+
+	// get background and pencil color
+	bgColor := input.At(attr.Min.X+1, attr.Max.Y-1)
+	//pcColor := input.At(attr.Min.X+1, attr.Max.Y)
+
+	wrapper := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(wrapper, wrapper.Bounds(), image.NewUniform(bgColor), image.Point{}, draw.Src)
+
+	// warping
 	middle := width / 2
 	rand.Seed(time.Now().UnixNano())
 	n := rand.Intn(2)
 	if n == 0 {
 		n--
 	}
-	for x := rgba.Bounds().Min.X; x < rgba.Bounds().Max.X; x++ {
+	for x := attr.Min.X; x < attr.Max.X; x++ {
 		var y_ost int
+		correct := float64(height)/72*5
 		if x <= middle {
-			y_ost = n * int(math.Log10(float64(middle-x+1))*5+0.5)
+			y_ost = n * int(math.Log10(float64(middle-x+1))*correct+0.5)
 		} else {
-			y_ost = -n * int(math.Log10(float64(x-middle+1))*5+0.5)
+			y_ost = -n * int(math.Log10(float64(x-middle+1))*correct+0.5)
 		}
-		for y := rgba.Bounds().Min.Y; y < rgba.Bounds().Max.Y; y++ {
-			src_y := y + y_ost
-			if src_y >= rgba.Bounds().Max.Y {
-				src_y = rgba.Bounds().Max.Y - 1
-			} else if src_y <= 0 {
-				src_y = 1
+		for y := attr.Min.Y; y < attr.Max.Y; y++ {
+			if src_y := y + y_ost; src_y >= attr.Max.Y || src_y <= 0 {
+				wrapper.Set(x, y, bgColor)
+			} else if x == attr.Min.X+1 && src_y == attr.Max.Y-1 {
+				wrapper.Set(x, y, bgColor)
+			} else if x == attr.Min.X+2 && src_y == attr.Max.Y-1 {
+				wrapper.Set(x, y, bgColor)
+			} else {
+				wrapper.Set(x, y, input.At(x, src_y))
 			}
-			warp.Set(x, y, rgba.At(x, src_y))
 		}
 	}
 
@@ -134,17 +161,17 @@ func (c *Captcha) genImage0() (err error) {
 		// get rand color && draw
 		c := rand_color[rand.Intn(len(rand_color))]
 		for rand.Intn(15) > 0 {
-			if warp.At(x, y) == b_white {
-				warp.Set(x, y, c)
+			if wrapper.At(x, y) == bgColor {
+				wrapper.Set(x, y, c)
 			}
-			if warp.At(x+1, y) == b_white {
-				warp.Set(x+1, y, c)
+			if wrapper.At(x+1, y) == bgColor {
+				wrapper.Set(x+1, y, c)
 			}
-			if warp.At(x, y+1) == b_white {
-				warp.Set(x, y+1, c)
+			if wrapper.At(x, y+1) == bgColor {
+				wrapper.Set(x, y+1, c)
 			}
-			if warp.At(x+1, y+1) == b_white {
-				warp.Set(x+1, y+1, c)
+			if wrapper.At(x+1, y+1) == bgColor {
+				wrapper.Set(x+1, y+1, c)
 			}
 			x += x_advance + rand.Intn(3)
 			y += y_advance + rand.Intn(3)
@@ -154,53 +181,66 @@ func (c *Captcha) genImage0() (err error) {
 		}
 	}
 
-	// turn it into byte
-	buf := new(bytes.Buffer)
-	err = png.Encode(buf, warp)
-	if err != nil {
-		return
-	}
-	c.Image = buf.Bytes()
-
-	//imgBase64Str := base64.StdEncoding.EncodeToString(c.Image)
-	//imgBase64Str = "data:image/png;base64," + imgBase64Str
-	//log.Println(imgBase64Str)
-
-	return
+	return wrapper
 }
 
-func (c *Captcha) genCode(n int) {
-	var code bytes.Buffer
-	b := []byte{
-		'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-		'2', '3', '4', '5', '6', '7', '8', '9',
+var fontHandler = &struct {
+	sync.Map
+	storeLock sync.Mutex
+}{}
+
+type CaptureAttributes struct {
+	Width int
+	Height int
+	FontFile string
+	FontSize float64
+	CharCount int
+	Wrapper func(input *image.RGBA) *image.RGBA
+
+	fontHandler *truetype.Font
+}
+
+func New(customAttr... *CaptureAttributes) (capture *Captcha, err error) {
+	// default attributes
+	attr := &CaptureAttributes{
+		Width:     176,
+		Height:    72,
+		FontFile:  "./font/Bodoni-16-Bold-11.ttf",
+		FontSize:  50,
+		CharCount: 4,
+		Wrapper:   nil,
 	}
-	count := len(b)
-	rand.Seed(time.Now().UnixNano())
-	u := make(map[byte]struct{})
-	for i := 0; i < n; i++ {
-		r := b[rand.Intn(count-1)]
-		_, ok := u[r]
-		for ok {
-			r = b[rand.Intn(count-1)]
-			_, ok = u[r]
+	if len(customAttr) > 0 {
+		attr = customAttr[0]
+	}
+
+	// font handler cache
+	if handler, ok := fontHandler.Load(attr.FontFile); ok {
+		attr.fontHandler = handler.(*truetype.Font)
+	} else {
+		fontHandler.storeLock.Lock()
+		defer fontHandler.storeLock.Unlock()
+		// double check
+		if handler, ok := fontHandler.Load(attr.FontFile); ok {
+			attr.fontHandler = handler.(*truetype.Font)
+		} else {
+			var fontFileBytes []byte
+			fontFileBytes, err = ioutil.ReadFile(attr.FontFile)
+			if err != nil {
+				return
+			}
+			attr.fontHandler, err = freetype.ParseFont(fontFileBytes)
+			if err != nil {
+				return
+			}
+			fontHandler.Store(attr.FontFile, attr.fontHandler)
 		}
-		u[r] = struct{}{}
-		code.WriteByte(r)
 	}
-	c.Code = code.Bytes()
-}
 
-func NewCaptcha(params ...interface{}) (c *Captcha, err error) {
-	c = &Captcha{}
-	defaultParams := []interface{}{4, 0} // [0]default 4 char [1]style 0
-	for key, val := range params {
-		defaultParams[key] = val
-	}
-	c.genCode(defaultParams[0].(int))
-	switch defaultParams[1].(int) {
-	case 0:
-		err = c.genImage0()
-	}
+	// generate capture
+	capture = new(Captcha)
+	capture.generateCode(attr.CharCount)
+	err = capture.generateImage(attr.Width, attr.Height, attr.FontSize, attr.fontHandler, attr.Wrapper)
+
 	return
 }
