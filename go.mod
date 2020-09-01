@@ -1,4 +1,4 @@
-module github.com/RedAlfred/SimpleCapture
+module github.com/RedAFD/SimpleCapture
 
 go 1.15
 

@@ -3,24 +3,26 @@ package capture
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"github.com/RedAFD/SimpleCapture/attribute"
+	"github.com/RedAFD/SimpleCapture/resource"
+	"github.com/RedAFD/SimpleCapture/wrapper"
+	"github.com/golang/freetype"
+	"github.com/golang/freetype/truetype"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io/ioutil"
-	"math"
 	"math/rand"
-	"sync"
 	"time"
-
-	"github.com/golang/freetype"
-	"github.com/golang/freetype/truetype"
 )
 
 type Captcha struct {
 	Code  []byte
 	Image []byte
+
+	attributes *attribute.Attributes
 }
 
 func (c *Captcha) String() string {
@@ -28,7 +30,13 @@ func (c *Captcha) String() string {
 	return fmt.Sprintf("\nCode:\n\t%s\nBase64Image:\n\tdata:image/png;base64,%s", c.Code, imgBase64Str)
 }
 
-func (c *Captcha) generateCode(charCount int) {
+func (c *Captcha) Reload() (err error) {
+	c.generateCode()
+	err = c.generateImage()
+	return
+}
+
+func (c *Captcha) generateCode() {
 	var code bytes.Buffer
 	dict := []byte{
 		'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
@@ -36,52 +44,54 @@ func (c *Captcha) generateCode(charCount int) {
 	}
 	count := len(dict)
 	rand.Seed(time.Now().UnixNano())
-	code.WriteByte('m')
-	for i := 0; i < charCount-1; i++ {
+	for i := 0; i < c.attributes.CharCount; i++ {
 		code.WriteByte(dict[rand.Intn(count-1)])
 	}
 	c.Code = code.Bytes()
 }
 
-func (c *Captcha) generateImage(width, height int, fontSize float64, fontHandler *truetype.Font, wrapper func(input *image.RGBA) *image.RGBA) (err error) {
+func (c *Captcha) generateImage() (err error) {
 
-	black := color.RGBA{0x2b, 0x2b, 0x2b, 0xff}
-	whiteSmoke := color.RGBA{0xea, 0xea, 0xea, 0xff}
+	textUF := image.NewUniform(c.attributes.CharColor)
+	backgroundUF := image.NewUniform(c.attributes.BackGroundColor)
+	rgba := image.NewRGBA(image.Rect(0, 0, c.attributes.Width, c.attributes.Height))
+	draw.Draw(rgba, rgba.Bounds(), backgroundUF, image.Point{}, draw.Src)
 
-	pencil := image.NewUniform(black)
-	background := image.NewUniform(whiteSmoke)
-	rgba := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(rgba, rgba.Bounds(), background, image.Point{}, draw.Src)
+	ftc := freetype.NewContext()
+	ftc.SetDst(rgba)
+	ftc.SetClip(rgba.Bounds())
+	ftc.SetSrc(textUF)
+	ftc.SetDPI(72)
+	ftc.SetFont(c.attributes.FontHandler)
+	ftc.SetFontSize(c.attributes.FontSize)
 
-	ctx := freetype.NewContext()
-	ctx.SetDst(rgba)
-	ctx.SetClip(rgba.Bounds())
-	ctx.SetSrc(pencil)
-	ctx.SetDPI(72)
-	ctx.SetFont(fontHandler)
-	ctx.SetFontSize(fontSize)
-
-	// draw the code text
-	size := int(ctx.PointToFixed(fontSize) >> 6)
-	xSpace := size - 20
-	x_offset := (width - len(c.Code)*xSpace) / 2
-	y_offset := size
-	for _, v := range c.Code {
-		_, err = ctx.DrawString(string(v), freetype.Pt(x_offset, y_offset))
+	// calculate the widths and print to image
+	face := truetype.NewFace(c.attributes.FontHandler, &truetype.Options{Size: c.attributes.FontSize})
+	charWidth := make(map[byte]int)
+	textWidth := 0
+	for _, x := range c.Code {
+		rawAdvance, ok := face.GlyphAdvance(rune(x))
+		if !ok {
+			err = errors.New("can't get advance")
+			return
+		}
+		advance := int(float64(rawAdvance) / 64)
+		charWidth[x] = advance
+		textWidth += advance
+	}
+	xOffset := (c.attributes.Width - textWidth) / 2
+	yOffset := int(ftc.PointToFixed(c.attributes.FontSize) >> 6)
+	for _, x := range c.Code {
+		_, err = ftc.DrawString(string(x), freetype.Pt(xOffset, yOffset))
 		if err != nil {
 			return
 		}
-		x_offset += xSpace
+		xOffset += charWidth[x]
 	}
 
-	// record background and pencil color
-	rgba.Set(rgba.Bounds().Min.X+1, rgba.Bounds().Max.Y-1, whiteSmoke)
-	rgba.Set(rgba.Bounds().Min.X+2, rgba.Bounds().Max.Y-1, black)
-
-	if wrapper == nil {
-		wrapper = defaultWrapper
+	if c.attributes.Wrapper != nil {
+		rgba = c.attributes.Wrapper(c.attributes, rgba)
 	}
-	rgba = wrapper(rgba)
 
 	// turn it into byte
 	buf := new(bytes.Buffer)
@@ -94,153 +104,36 @@ func (c *Captcha) generateImage(width, height int, fontSize float64, fontHandler
 	return
 }
 
-func defaultWrapper(input *image.RGBA) *image.RGBA {
-	// drawing board attribute
-	attr := input.Bounds()
-	width := attr.Dx()
-	height := attr.Dy()
+func New(attributes... *attribute.Attributes) (capture *Captcha, err error) {
 
-	// get background and pencil color
-	bgColor := input.At(attr.Min.X+1, attr.Max.Y-1)
-	//pcColor := input.At(attr.Min.X+1, attr.Max.Y)
-
-	wrapper := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(wrapper, wrapper.Bounds(), image.NewUniform(bgColor), image.Point{}, draw.Src)
-
-	// warping
-	middle := width / 2
-	rand.Seed(time.Now().UnixNano())
-	n := rand.Intn(2)
-	if n == 0 {
-		n--
-	}
-	for x := attr.Min.X; x < attr.Max.X; x++ {
-		var y_ost int
-		correct := float64(height)/72*5
-		if x <= middle {
-			y_ost = n * int(math.Log10(float64(middle-x+1))*correct+0.5)
-		} else {
-			y_ost = -n * int(math.Log10(float64(x-middle+1))*correct+0.5)
-		}
-		for y := attr.Min.Y; y < attr.Max.Y; y++ {
-			if src_y := y + y_ost; src_y >= attr.Max.Y || src_y <= 0 {
-				wrapper.Set(x, y, bgColor)
-			} else if x == attr.Min.X+1 && src_y == attr.Max.Y-1 {
-				wrapper.Set(x, y, bgColor)
-			} else if x == attr.Min.X+2 && src_y == attr.Max.Y-1 {
-				wrapper.Set(x, y, bgColor)
-			} else {
-				wrapper.Set(x, y, input.At(x, src_y))
-			}
-		}
-	}
-
-	// add some dot
-	rand_color := []color.RGBA{
-		{0xd3, 0xb9, 0xb2, 0xff}, // red
-		{0xba, 0xbe, 0xd4, 0xff}, // blue
-		{0xc2, 0xb4, 0xc0, 0xff}, // purple
-		{0xcf, 0xc0, 0xb8, 0xff}, // brown
-		{0xbc, 0xd0, 0xce, 0xff}, // green
-	}
-	for i := 0; i < 35; i++ {
-		// x && direction
-		x := rand.Intn(width)
-		x_pre := rand.Intn(2)
-		if x_pre == 0 {
-			x_pre--
-		}
-		x_advance := x_pre * rand.Intn(4)
-		// y && direction
-		y := rand.Intn(height)
-		y_pre := rand.Intn(2)
-		if y_pre == 0 {
-			y_pre--
-		}
-		y_advance := y_pre * rand.Intn(4)
-		// get rand color && draw
-		c := rand_color[rand.Intn(len(rand_color))]
-		for rand.Intn(15) > 0 {
-			if wrapper.At(x, y) == bgColor {
-				wrapper.Set(x, y, c)
-			}
-			if wrapper.At(x+1, y) == bgColor {
-				wrapper.Set(x+1, y, c)
-			}
-			if wrapper.At(x, y+1) == bgColor {
-				wrapper.Set(x, y+1, c)
-			}
-			if wrapper.At(x+1, y+1) == bgColor {
-				wrapper.Set(x+1, y+1, c)
-			}
-			x += x_advance + rand.Intn(3)
-			y += y_advance + rand.Intn(3)
-			if x <= 1 || x >= width-1 || y <= 1 || y >= height-1 {
-				break
-			}
-		}
-	}
-
-	return wrapper
-}
-
-var fontHandler = &struct {
-	sync.Map
-	storeLock sync.Mutex
-}{}
-
-type CaptureAttributes struct {
-	Width int
-	Height int
-	FontFile string
-	FontSize float64
-	CharCount int
-	Wrapper func(input *image.RGBA) *image.RGBA
-
-	fontHandler *truetype.Font
-}
-
-func New(customAttr... *CaptureAttributes) (capture *Captcha, err error) {
-	// default attributes
-	attr := &CaptureAttributes{
-		Width:     176,
-		Height:    72,
-		FontFile:  "./font/Bodoni-16-Bold-11.ttf",
-		FontSize:  50,
-		CharCount: 4,
-		Wrapper:   nil,
-	}
-	if len(customAttr) > 0 {
-		attr = customAttr[0]
-	}
-
-	// font handler cache
-	if handler, ok := fontHandler.Load(attr.FontFile); ok {
-		attr.fontHandler = handler.(*truetype.Font)
+	// init capture attribute
+	var attr *attribute.Attributes
+	if last := len(attributes)-1; last >= 0 {
+		attr = attributes[last]
 	} else {
-		fontHandler.storeLock.Lock()
-		defer fontHandler.storeLock.Unlock()
-		// double check
-		if handler, ok := fontHandler.Load(attr.FontFile); ok {
-			attr.fontHandler = handler.(*truetype.Font)
-		} else {
-			var fontFileBytes []byte
-			fontFileBytes, err = ioutil.ReadFile(attr.FontFile)
-			if err != nil {
-				return
-			}
-			attr.fontHandler, err = freetype.ParseFont(fontFileBytes)
-			if err != nil {
-				return
-			}
-			fontHandler.Store(attr.FontFile, attr.fontHandler)
+		// default attribute
+		attr = &attribute.Attributes{
+			Width:           176,
+			Height:          72,
+			FontFile:        resource.ResourceFontFile("Bodoni-16-Bold-11.ttf"),
+			FontSize:        50,
+			CharCount:       4,
+			CharColor:       color.RGBA{0x2b, 0x2b, 0x2b, 0xff},
+			BackGroundColor: color.RGBA{0xea, 0xea, 0xea, 0xff},
+			Wrapper:         wrapper.DefaultWrapper,
+		}
+	}
+	if attr.FontHandler == nil {
+		err = attr.CreateFontHandler()
+		if err != nil {
+			return
 		}
 	}
 
 	// generate capture
 	capture = new(Captcha)
-	capture.generateCode(attr.CharCount)
-	err = capture.generateImage(attr.Width, attr.Height, attr.FontSize, attr.fontHandler, attr.Wrapper)
+	capture.attributes = attr
+	err = capture.Reload()
 
 	return
 }
