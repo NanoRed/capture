@@ -1,15 +1,17 @@
 package wrapper
 
 import (
-	"github.com/RedAFD/SimpleCapture/attribute"
 	"image"
 	"image/color"
 	"image/draw"
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/RedAFD/SimpleCapture/attribute"
 )
 
+// DefaultWrapper default image wrapper, you can write your own wrapper to act on the image
 func DefaultWrapper(attr *attribute.Attributes, input *image.RGBA) *image.RGBA {
 	// drawing boards
 	bounds := input.Bounds()
@@ -31,7 +33,7 @@ func DefaultWrapper(attr *attribute.Attributes, input *image.RGBA) *image.RGBA {
 	}
 	for x := bounds.Min.X; x < bounds.Max.X; x++ {
 		var yOffset int
-		correct := float64(height)/72*5
+		correct := float64(height) / 72 * 5
 		if x <= middle {
 			yOffset = sign * int(math.Log10(float64(middle-x+1))*correct+0.5)
 		} else {

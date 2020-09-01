@@ -8,25 +8,27 @@ char* resourcePath()
 */
 import "C"
 import (
-    "bytes"
-    "path"
+	"bytes"
+	"path"
 )
 
 var resourcePath string
 
 func init() {
-    resourcePath = path.Dir(C.GoString(C.resourcePath()))
+	resourcePath = path.Dir(C.GoString(C.resourcePath()))
 }
 
-func ResourcePath() string {
-    return resourcePath
+// GetResourcePath get resource path
+func GetResourcePath() string {
+	return resourcePath
 }
 
-func ResourceFontFile(filename string) string {
-    var buffer bytes.Buffer
-    buffer.WriteString(resourcePath)
-    buffer.WriteString("/font/")
-    buffer.WriteString(filename)
+// GetResourceFontFile get font file path
+func GetResourceFontFile(filename string) string {
+	var buffer bytes.Buffer
+	buffer.WriteString(resourcePath)
+	buffer.WriteString("/font/")
+	buffer.WriteString(filename)
 
-    return buffer.String()
+	return buffer.String()
 }

@@ -5,19 +5,21 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/RedAFD/SimpleCapture/attribute"
-	"github.com/RedAFD/SimpleCapture/resource"
-	"github.com/RedAFD/SimpleCapture/wrapper"
-	"github.com/golang/freetype"
-	"github.com/golang/freetype/truetype"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
 	"math/rand"
 	"time"
+
+	"github.com/RedAFD/SimpleCapture/attribute"
+	"github.com/RedAFD/SimpleCapture/resource"
+	"github.com/RedAFD/SimpleCapture/wrapper"
+	"github.com/golang/freetype"
+	"github.com/golang/freetype/truetype"
 )
 
+// Captcha use Code and Image for your business
 type Captcha struct {
 	Code  []byte
 	Image []byte
@@ -30,6 +32,7 @@ func (c *Captcha) String() string {
 	return fmt.Sprintf("\nCode:\n\t%s\nBase64Image:\n\tdata:image/png;base64,%s", c.Code, imgBase64Str)
 }
 
+// Reload refresh Code and Image
 func (c *Captcha) Reload() (err error) {
 	c.generateCode()
 	err = c.generateImage()
@@ -104,18 +107,19 @@ func (c *Captcha) generateImage() (err error) {
 	return
 }
 
-func New(attributes... *attribute.Attributes) (capture *Captcha, err error) {
+// New create a new Capture object
+func New(attributes ...*attribute.Attributes) (capture *Captcha, err error) {
 
 	// init capture attribute
 	var attr *attribute.Attributes
-	if last := len(attributes)-1; last >= 0 {
+	if last := len(attributes) - 1; last >= 0 {
 		attr = attributes[last]
 	} else {
 		// default attribute
 		attr = &attribute.Attributes{
 			Width:           176,
 			Height:          72,
-			FontFile:        resource.ResourceFontFile("Bodoni-16-Bold-11.ttf"),
+			FontFile:        resource.GetResourceFontFile("Bodoni-16-Bold-11.ttf"),
 			FontSize:        50,
 			CharCount:       4,
 			CharColor:       color.RGBA{0x2b, 0x2b, 0x2b, 0xff},
