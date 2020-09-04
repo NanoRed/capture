@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/RedAFD/SimpleCapture/attribute"
+	"github.com/RedAFD/capture/attribute"
 )
 
 // DefaultWrapper default image wrapper, you can write your own wrapper to act on the image

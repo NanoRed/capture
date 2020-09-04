@@ -12,9 +12,9 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/RedAFD/SimpleCapture/attribute"
-	"github.com/RedAFD/SimpleCapture/resource"
-	"github.com/RedAFD/SimpleCapture/wrapper"
+	"github.com/RedAFD/capture/attribute"
+	"github.com/RedAFD/capture/resource"
+	"github.com/RedAFD/capture/wrapper"
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
 )

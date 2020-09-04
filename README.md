@@ -1,4 +1,4 @@
-# SimpleCapture
+# capture
 a simple capture implementation
 ### Usage
 ```go
@@ -8,9 +8,9 @@ import (
     "os"
     "fmt"
     "image/color"
-    capture "github.com/RedAFD/SimpleCapture"
-    "github.com/RedAFD/SimpleCapture/attribute"
-    "github.com/RedAFD/SimpleCapture/wrapper"
+    "github.com/RedAFD/capture"
+    "github.com/RedAFD/capture/attribute"
+    "github.com/RedAFD/capture/wrapper"
 )
 
 func main() {
