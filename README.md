@@ -1,5 +1,6 @@
 # capture
-a simple capture implementation
+a simple capture implementation<br>
+一个简易的图片验证码实现
 ### Usage
 ```go
 package main
